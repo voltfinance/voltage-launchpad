@@ -4,7 +4,7 @@ pragma solidity 0.8.6;
 
 import "@openzeppelin/contracts/token/ERC20/extensions/IERC20Metadata.sol";
 
-import "./IJoePair.sol";
+import "./IVoltagePair.sol";
 
 interface ILaunchEvent {
     struct UserInfo {
@@ -22,7 +22,8 @@ interface ILaunchEvent {
         uint256 _floorPrice,
         uint256 _maxWithdrawPenalty,
         uint256 _fixedWithdrawPenalty,
-        uint256 _maxAllocation,
+        uint256 _maxUnstakedUserAllocation,
+        uint256 _maxStakedUserAllocation,
         uint256 _userTimelock,
         uint256 _issuerTimelock
     ) external;
@@ -55,7 +56,7 @@ interface ILaunchEvent {
 
     function token() external view returns (IERC20Metadata);
 
-    function pair() external view returns (IJoePair);
+    function pair() external view returns (IVoltagePair);
 
     function avaxAllocated() external view returns (uint256);
 

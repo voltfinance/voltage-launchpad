@@ -2,7 +2,7 @@
 
 pragma solidity 0.8.6;
 
-interface IJoePair {
+interface IVoltagePair {
     event Approval(
         address indexed owner,
         address indexed spender,

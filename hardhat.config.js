@@ -8,12 +8,40 @@ require("hardhat-contract-sizer");
 require("hardhat-deploy");
 require("hardhat-deploy-ethers");
 require("solidity-coverage");
+require("@nomiclabs/hardhat-vyper");
 
 require("./tasks/launchtoken");
 require("./tasks/enter");
 
 module.exports = {
-  solidity: "0.8.6",
+  solidity: {
+    compilers: [
+      { version: "0.8.6", 
+        settings: {
+          optimizer: {
+            enabled: true,
+            runs: 200,
+          },
+      }, }, 
+      { version: "0.5.16", 
+        settings: {
+          optimizer: {
+            enabled: true,
+            runs: 200,
+          },
+      }, }, 
+      { version: "0.6.6", 
+        settings: {
+          optimizer: {
+            enabled: true,
+            runs: 200,
+          },
+      }, }
+    ],
+  },
+  vyper: {
+    version: "0.3.1"
+  },
   defaultNetwork: "hardhat",
   networks: {
     hardhat: {},

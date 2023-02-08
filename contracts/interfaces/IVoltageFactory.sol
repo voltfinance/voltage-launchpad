@@ -2,7 +2,7 @@
 
 pragma solidity 0.8.6;
 
-interface IJoeFactory {
+interface IVoltageFactory {
     event PairCreated(
         address indexed token0,
         address indexed token1,

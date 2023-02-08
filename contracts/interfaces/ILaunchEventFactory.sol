@@ -2,22 +2,37 @@
 
 pragma solidity 0.8.6;
 
-interface IRocketJoeFactory {
-    event RJLaunchEventCreated(
+struct LaunchParams {
+    address issuer;
+    uint256 phaseOneStartTime;
+    address token;
+    uint256 tokenAmountIncludingIncentives;
+    uint256 tokenIncentivesPercent;
+    uint256 floorPrice;
+    uint256 maxWithdrawPenalty;
+    uint256 fixedWithdrawPenalty;
+    uint256 maxUnstakedUserAllocation;
+    uint256 maxStakedUserAllocation;
+    uint256 userTimelock;
+    uint256 issuerTimelock;
+}
+
+interface ILaunchEventFactory {
+    event LaunchEventCreated(
         address indexed launchEvent,
         address indexed issuer,
         address indexed token,
         uint256 phaseOneStartTime,
         uint256 phaseTwoStartTime,
         uint256 phaseThreeStartTime,
-        address rJoe,
-        uint256 rJoePerAvax
+        address veVolt,
+        uint256 veVoltPerVolt
     );
-    event SetRJoe(address indexed token);
+    event SetVeVolt(address indexed token);
     event SetPenaltyCollector(address indexed collector);
     event SetRouter(address indexed router);
     event SetFactory(address indexed factory);
-    event SetRJoePerAvax(uint256 rJoePerAvax);
+    event SetVeVoltPerVolt(uint256 veVoltPerVolt);
     event SetEventImplementation(address indexed implementation);
     event IssuingTokenDeposited(address indexed token, uint256 amount);
     event PhaseDurationChanged(uint256 phase, uint256 duration);
@@ -27,15 +42,15 @@ interface IRocketJoeFactory {
 
     function penaltyCollector() external view returns (address);
 
-    function wavax() external view returns (address);
+    function volt() external view returns (address);
 
-    function rJoePerAvax() external view returns (uint256);
+    function veVoltPerVolt() external view returns (uint256);
 
     function router() external view returns (address);
 
     function factory() external view returns (address);
 
-    function rJoe() external view returns (address);
+    function veVolt() external view returns (address);
 
     function phaseOneDuration() external view returns (uint256);
 
@@ -43,30 +58,18 @@ interface IRocketJoeFactory {
 
     function phaseTwoDuration() external view returns (uint256);
 
-    function getRJLaunchEvent(address token)
+    function getLaunchEvent(address token)
         external
         view
         returns (address launchEvent);
 
-    function isRJLaunchEvent(address token) external view returns (bool);
+    function isLaunchEvent(address token) external view returns (bool);
 
-    function allRJLaunchEvents(uint256) external view returns (address pair);
+    function allLaunchEvents(uint256) external view returns (address pair);
 
     function numLaunchEvents() external view returns (uint256);
 
-    function createRJLaunchEvent(
-        address _issuer,
-        uint256 _phaseOneStartTime,
-        address _token,
-        uint256 _tokenAmount,
-        uint256 _tokenIncentivesPercent,
-        uint256 _floorPrice,
-        uint256 _maxWithdrawPenalty,
-        uint256 _fixedWithdrawPenalty,
-        uint256 _maxAllocation,
-        uint256 _userTimelock,
-        uint256 _issuerTimelock
-    ) external returns (address pair);
+    function createLaunchEvent(LaunchParams memory params) external returns (address pair);
 
     function setPenaltyCollector(address) external;
 
@@ -74,7 +77,7 @@ interface IRocketJoeFactory {
 
     function setFactory(address) external;
 
-    function setRJoePerAvax(uint256) external;
+    function setVeVoltPerVolt(uint256) external;
 
     function setPhaseDuration(uint256, uint256) external;
 

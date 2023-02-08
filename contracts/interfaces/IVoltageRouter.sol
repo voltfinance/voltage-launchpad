@@ -2,9 +2,9 @@
 
 pragma solidity 0.8.6;
 
-import "./IJoeRouter01.sol";
+import "./IVoltageRouter01.sol";
 
-interface IJoeRouter02 is IJoeRouter01 {
+interface IVoltageRouter is IVoltageRouter01 {
     function removeLiquidityAVAXSupportingFeeOnTransferTokens(
         address token,
         uint256 liquidity,

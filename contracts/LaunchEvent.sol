@@ -4,23 +4,25 @@ pragma solidity 0.8.6;
 
 import "@openzeppelin/contracts-upgradeable/token/ERC20/extensions/IERC20MetadataUpgradeable.sol";
 import "@openzeppelin/contracts-upgradeable/token/ERC20/utils/SafeERC20Upgradeable.sol";
+import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import "@openzeppelin/contracts/utils/math/Math.sol";
 
-import "./interfaces/IJoeFactory.sol";
-import "./interfaces/IJoePair.sol";
-import "./interfaces/IJoeRouter02.sol";
-import "./interfaces/IRocketJoeFactory.sol";
-import "./interfaces/IRocketJoeToken.sol";
-import "./interfaces/IWAVAX.sol";
+import "./interfaces/ILaunchEventFactory.sol";
+import "./interfaces/IVoltageFactory.sol";
+import "./interfaces/IVoltagePair.sol";
+import "./interfaces/IVoltageRouter.sol";
+import "./interfaces/IVeVolt.sol";
 
 interface Ownable {
     function owner() external view returns (address);
 }
 
-/// @title Rocket Joe Launch Event
-/// @author Trader Joe
+/// @title Launch Event
+/// @author Voltage
 /// @notice A liquidity launch contract enabling price discovery and token distribution at secondary market listing price
 contract LaunchEvent {
     using SafeERC20Upgradeable for IERC20MetadataUpgradeable;
+    using SafeERC20 for IERC20;
 
     /// @notice The phases the launch event can be in
     /// @dev Should these have more semantic names: Bid, Cancel, Withdraw
@@ -32,11 +34,11 @@ contract LaunchEvent {
     }
 
     struct UserInfo {
-        /// @notice How much AVAX user can deposit for this launch event
-        /// @dev Can be increased by burning more rJOE, but will always be
+        /// @notice How much Volt user can deposit for this launch event
+        /// @dev Can be increased by locking more veVolt, but will always be
         /// smaller than or equal to `maxAllocation`
         uint256 allocation;
-        /// @notice How much AVAX user has deposited for this launch event
+        /// @notice How much Volt user has deposited for this launch event
         uint256 balance;
         /// @notice Whether user has withdrawn the LP
         bool hasWithdrawnPair;
@@ -60,7 +62,7 @@ contract LaunchEvent {
     /// then 105 000 * 5e16 / (1e18 + 5e16) = 5 000 tokens are used for incentives
     uint256 public tokenIncentivesPercent;
 
-    /// @notice Floor price in AVAX per token (can be 0)
+    /// @notice Floor price in Volt per token (can be 0)
     /// @dev floorPrice is scaled to 1e18
     uint256 public floorPrice;
 
@@ -78,27 +80,29 @@ contract LaunchEvent {
     /// e.g. fixed penalty of 20% `fixedWithdrawPenalty = 2e17`
     uint256 public fixedWithdrawPenalty;
 
-    IRocketJoeToken public rJoe;
-    uint256 public rJoePerAvax;
-    IWAVAX private WAVAX;
+    IERC20 public volt;
+    IVeVolt public veVolt;
+    uint256 public veVoltPerVolt;
     IERC20MetadataUpgradeable public token;
 
-    IJoeRouter02 private router;
-    IJoeFactory private factory;
-    IRocketJoeFactory public rocketJoeFactory;
+    ILaunchEventFactory private launchEventFactory;
+    IVoltageRouter private router;
+    IVoltageFactory private factory;
 
     bool public stopped;
 
-    uint256 public maxAllocation;
+    uint256 public maxUnstakedUserAllocation;
+    
+    uint256 public maxStakedUserAllocation;
 
     mapping(address => UserInfo) public getUserInfo;
 
-    /// @dev The address of the JoePair, set after createLiquidityPool is called
-    IJoePair public pair;
+    /// @dev The address of the VoltagePair, set after createLiquidityPool is called
+    IVoltagePair public pair;
 
-    /// @dev The total amount of avax that was sent to the router to create the initial liquidity pair.
+    /// @dev The total amount of volt that was sent to the router to create the initial liquidity pair.
     /// Used to calculate the amount of LP to send based on the user's participation in the launch event
-    uint256 public avaxAllocated;
+    uint256 public voltAllocated;
 
     /// @dev The total amount of tokens that was sent to the router to create the initial liquidity pair.
     uint256 public tokenAllocated;
@@ -126,14 +130,15 @@ contract LaunchEvent {
     /// @dev avaxReserve is the exact amount of AVAX that needs to be kept inside the contract in order to send everyone's
     /// AVAX. If there is some excess (because someone sent token directly to the contract), the
     /// penaltyCollector can collect the excess using `skim()`
-    uint256 private avaxReserve;
+    uint256 private voltReserve;
 
     event LaunchEventInitialized(
         uint256 tokenIncentivesPercent,
         uint256 floorPrice,
         uint256 maxWithdrawPenalty,
         uint256 fixedWithdrawPenalty,
-        uint256 maxAllocation,
+        uint256 maxUnstakedUserAllocation,
+        uint256 maxStakedUserAllocation,
         uint256 userTimelock,
         uint256 issuerTimelock,
         uint256 tokenReserve,
@@ -142,8 +147,7 @@ contract LaunchEvent {
 
     event UserParticipated(
         address indexed user,
-        uint256 avaxAmount,
-        uint256 rJoeAmount
+        uint256 voltAmount
     );
 
     event UserWithdrawn(
@@ -180,7 +184,7 @@ contract LaunchEvent {
 
     event Stopped();
 
-    event AvaxEmergencyWithdraw(address indexed user, uint256 amount);
+    event VoltEmergencyWithdraw(address indexed user, uint256 amount);
 
     event TokenEmergencyWithdraw(address indexed user, uint256 amount);
 
@@ -210,7 +214,8 @@ contract LaunchEvent {
     /// @param _floorPrice The minimum price the token is sold at
     /// @param _maxWithdrawPenalty The max withdraw penalty during phase 1, in parts per 1e18
     /// @param _fixedWithdrawPenalty The fixed withdraw penalty during phase 2, in parts per 1e18
-    /// @param _maxAllocation The maximum amount of AVAX depositable per user
+    /// @param _maxUnstakedUserAllocation The maximum amount of VOLT depositable per unstaked user
+    /// @param _maxStakedUserAllocation The maximum amount of VOLT depositable per staked user
     /// @param _userTimelock The time a user must wait after auction ends to withdraw liquidity
     /// @param _issuerTimelock The time the issuer must wait after auction ends to withdraw liquidity
     /// @dev This function is called by the factory immediately after it creates the contract instance
@@ -222,22 +227,23 @@ contract LaunchEvent {
         uint256 _floorPrice,
         uint256 _maxWithdrawPenalty,
         uint256 _fixedWithdrawPenalty,
-        uint256 _maxAllocation,
+        uint256 _maxUnstakedUserAllocation,
+        uint256 _maxStakedUserAllocation,
         uint256 _userTimelock,
         uint256 _issuerTimelock
     ) external atPhase(Phase.NotStarted) {
         require(auctionStart == 0, "LaunchEvent: already initialized");
-        rocketJoeFactory = IRocketJoeFactory(msg.sender);
+        launchEventFactory = ILaunchEventFactory(msg.sender);
         require(
-            _token != rocketJoeFactory.wavax(),
-            "LaunchEvent: token is wavax"
+            _token != launchEventFactory.volt(),
+            "LaunchEvent: token is volt"
         );
 
-        WAVAX = IWAVAX(rocketJoeFactory.wavax());
-        router = IJoeRouter02(rocketJoeFactory.router());
-        factory = IJoeFactory(rocketJoeFactory.factory());
-        rJoe = IRocketJoeToken(rocketJoeFactory.rJoe());
-        rJoePerAvax = rocketJoeFactory.rJoePerAvax();
+        router = IVoltageRouter(launchEventFactory.router());
+        factory = IVoltageFactory(launchEventFactory.factory());
+        volt = IERC20(launchEventFactory.volt());
+        veVolt = IVeVolt(launchEventFactory.veVolt());
+        veVoltPerVolt = launchEventFactory.veVoltPerVolt();
 
         require(
             _maxWithdrawPenalty <= 5e17,
@@ -264,8 +270,12 @@ contract LaunchEvent {
             "LaunchEvent: issuer must be address zero"
         );
         require(
-            _maxAllocation > 0,
-            "LaunchEvent: max allocation must not be zero"
+            _maxStakedUserAllocation > 0,
+            "LaunchEvent: max staked user allocation must not be zero"
+        );
+        require(
+            _maxUnstakedUserAllocation > 0,
+            "LaunchEvent: max unstaked user allocation must not be zero"
         );
         require(
             _tokenIncentivesPercent < 1 ether,
@@ -275,9 +285,9 @@ contract LaunchEvent {
         issuer = _issuer;
 
         auctionStart = _auctionStart;
-        phaseOneDuration = rocketJoeFactory.phaseOneDuration();
-        phaseOneNoFeeDuration = rocketJoeFactory.phaseOneNoFeeDuration();
-        phaseTwoDuration = rocketJoeFactory.phaseTwoDuration();
+        phaseOneDuration = launchEventFactory.phaseOneDuration();
+        phaseOneNoFeeDuration = launchEventFactory.phaseOneNoFeeDuration();
+        phaseTwoDuration = launchEventFactory.phaseTwoDuration();
 
         token = IERC20MetadataUpgradeable(_token);
         uint256 balance = token.balanceOf(address(this));
@@ -297,7 +307,8 @@ contract LaunchEvent {
         maxWithdrawPenalty = _maxWithdrawPenalty;
         fixedWithdrawPenalty = _fixedWithdrawPenalty;
 
-        maxAllocation = _maxAllocation;
+        maxStakedUserAllocation = _maxStakedUserAllocation;
+        maxUnstakedUserAllocation = _maxUnstakedUserAllocation;
 
         userTimelock = _userTimelock;
         issuerTimelock = _issuerTimelock;
@@ -307,7 +318,8 @@ contract LaunchEvent {
             floorPrice,
             maxWithdrawPenalty,
             fixedWithdrawPenalty,
-            maxAllocation,
+            maxUnstakedUserAllocation,
+            maxStakedUserAllocation,
             userTimelock,
             issuerTimelock,
             tokenReserve,
@@ -329,49 +341,46 @@ contract LaunchEvent {
         return Phase.PhaseThree;
     }
 
-    /// @notice Deposits AVAX and burns rJoe
-    function depositAVAX()
+    /// @notice Deposits Volt
+    function deposit(
+        uint256 _amount
+    )
         external
-        payable
         isStopped(false)
         atPhase(Phase.PhaseOne)
     {
         require(msg.sender != issuer, "LaunchEvent: issuer cannot participate");
         require(
-            msg.value > 0,
-            "LaunchEvent: expected non-zero AVAX to deposit"
+            _amount > 0,
+            "LaunchEvent: expected non-zero Volt to deposit"
         );
 
         UserInfo storage user = getUserInfo[msg.sender];
-        uint256 newAllocation = user.balance + msg.value;
+        uint256 newAllocation = user.balance + _amount;
+
+        uint256 userAllocation = getAllocation(msg.sender);
+        require(
+            newAllocation <= userAllocation,
+            "LaunchEvent: amount exceeds user allocation"
+        );
+
+        uint256 maxAllocation = getMaxAllocation(msg.sender);
         require(
             newAllocation <= maxAllocation,
             "LaunchEvent: amount exceeds max allocation"
         );
 
-        uint256 rJoeNeeded;
-        // check if additional allocation is required.
-        if (newAllocation > user.allocation) {
-            // Get amount of rJOE tokens needed to burn and update allocation
-            rJoeNeeded = getRJoeAmount(newAllocation - user.allocation);
-            // Set allocation to the current balance as it's impossible
-            // to buy more allocation without sending AVAX too
-            user.allocation = newAllocation;
-        }
+        volt.safeTransferFrom(msg.sender, address(this), _amount);
 
         user.balance = newAllocation;
-        avaxReserve += msg.value;
+        voltReserve += _amount;
 
-        if (rJoeNeeded > 0) {
-            rJoe.burnFrom(msg.sender, rJoeNeeded);
-        }
-
-        emit UserParticipated(msg.sender, msg.value, rJoeNeeded);
+        emit UserParticipated(msg.sender, _amount);
     }
 
-    /// @notice Withdraw AVAX, only permitted during phase 1 and 2
-    /// @param _amount The amount of AVAX to withdraw
-    function withdrawAVAX(uint256 _amount) external isStopped(false) {
+    /// @notice Withdraw Volt, only permitted during phase 1 and 2
+    /// @param _amount The amount of Volt to withdraw
+    function withdraw(uint256 _amount) external isStopped(false) {
         Phase _currentPhase = currentPhase();
         require(
             _currentPhase == Phase.PhaseOne || _currentPhase == Phase.PhaseTwo,
@@ -388,35 +397,35 @@ contract LaunchEvent {
         uint256 feeAmount = (_amount * getPenalty()) / 1e18;
         uint256 amountMinusFee = _amount - feeAmount;
 
-        avaxReserve -= _amount;
+        voltReserve -= _amount;
 
         if (feeAmount > 0) {
-            _safeTransferAVAX(rocketJoeFactory.penaltyCollector(), feeAmount);
+            volt.safeTransfer(launchEventFactory.penaltyCollector(), feeAmount);
         }
-        _safeTransferAVAX(msg.sender, amountMinusFee);
+        volt.safeTransfer(msg.sender, amountMinusFee);
         emit UserWithdrawn(msg.sender, _amount, feeAmount);
     }
 
-    /// @notice Create the JoePair
+    /// @notice Create the VoltPair
     /// @dev Can only be called once after phase 3 has started
     function createPair() external isStopped(false) atPhase(Phase.PhaseThree) {
-        (address wavaxAddress, address tokenAddress) = (
-            address(WAVAX),
+        (address voltAddress, address tokenAddress) = (
+            address(volt),
             address(token)
         );
-        address _pair = factory.getPair(wavaxAddress, tokenAddress);
+        address _pair = factory.getPair(voltAddress, tokenAddress);
         require(
-            _pair == address(0) || IJoePair(_pair).totalSupply() == 0,
+            _pair == address(0) || IVoltagePair(_pair).totalSupply() == 0,
             "LaunchEvent: liquid pair already exists"
         );
-        require(avaxReserve > 0, "LaunchEvent: no avax balance");
+        require(voltReserve > 0, "LaunchEvent: no volt balance");
 
         uint256 tokenDecimals = token.decimals();
         tokenAllocated = tokenReserve;
 
         // Adjust the amount of tokens sent to the pool if floor price not met
-        if (floorPrice > (avaxReserve * 10**tokenDecimals) / tokenAllocated) {
-            tokenAllocated = (avaxReserve * 10**tokenDecimals) / floorPrice;
+        if (floorPrice > (voltReserve * 10**tokenDecimals) / tokenAllocated) {
+            tokenAllocated = (voltReserve * 10**tokenDecimals) / floorPrice;
             tokenIncentivesForUsers =
                 (tokenIncentivesForUsers * tokenAllocated) /
                 tokenReserve;
@@ -425,27 +434,26 @@ contract LaunchEvent {
                 tokenIncentivesForUsers;
         }
 
-        avaxAllocated = avaxReserve;
-        avaxReserve = 0;
+        voltAllocated = voltReserve;
+        voltReserve = 0;
 
         tokenReserve -= tokenAllocated;
 
-        WAVAX.deposit{value: avaxAllocated}();
         if (_pair == address(0)) {
-            pair = IJoePair(factory.createPair(wavaxAddress, tokenAddress));
+            pair = IVoltagePair(factory.createPair(voltAddress, tokenAddress));
         } else {
-            pair = IJoePair(_pair);
+            pair = IVoltagePair(_pair);
         }
-        WAVAX.transfer(address(pair), avaxAllocated);
+        volt.safeTransfer(address(pair), voltAllocated);
         token.safeTransfer(address(pair), tokenAllocated);
         lpSupply = pair.mint(address(this));
 
         emit LiquidityPoolCreated(
             address(pair),
             tokenAddress,
-            wavaxAddress,
+            voltAddress,
             tokenAllocated,
-            avaxAllocated
+            voltAllocated
         );
     }
 
@@ -490,7 +498,7 @@ contract LaunchEvent {
         emit IncentiveTokenWithdraw(msg.sender, address(token), amount);
     }
 
-    /// @notice Withdraw AVAX if launch has been cancelled
+    /// @notice Withdraw VOLT if launch has been cancelled
     function emergencyWithdraw() external isStopped(true) {
         if (address(pair) == address(0)) {
             if (msg.sender != issuer) {
@@ -502,11 +510,11 @@ contract LaunchEvent {
 
                 uint256 balance = user.balance;
                 user.balance = 0;
-                avaxReserve -= balance;
+                voltReserve -= balance;
 
-                _safeTransferAVAX(msg.sender, balance);
+                volt.safeTransfer(msg.sender, balance);
 
-                emit AvaxEmergencyWithdraw(msg.sender, balance);
+                emit VoltEmergencyWithdraw(msg.sender, balance);
             } else {
                 uint256 balance = tokenReserve + tokenIncentivesBalance;
                 tokenReserve = 0;
@@ -542,8 +550,8 @@ contract LaunchEvent {
     /// @notice Stops the launch event and allows participants to withdraw deposits
     function allowEmergencyWithdraw() external {
         require(
-            msg.sender == Ownable(address(rocketJoeFactory)).owner(),
-            "LaunchEvent: caller is not RocketJoeFactory owner"
+            msg.sender == Ownable(address(launchEventFactory)).owner(),
+            "LaunchEvent: caller is not LaunchEventFactory owner"
         );
         stopped = true;
         emit Stopped();
@@ -553,7 +561,7 @@ contract LaunchEvent {
     /// Any excess tokens are sent to the penaltyCollector
     function skim() external {
         require(msg.sender == tx.origin, "LaunchEvent: EOA only");
-        address penaltyCollector = rocketJoeFactory.penaltyCollector();
+        address penaltyCollector = launchEventFactory.penaltyCollector();
 
         uint256 excessToken = token.balanceOf(address(this)) -
             tokenReserve -
@@ -562,9 +570,9 @@ contract LaunchEvent {
             token.safeTransfer(penaltyCollector, excessToken);
         }
 
-        uint256 excessAvax = address(this).balance - avaxReserve;
-        if (excessAvax > 0) {
-            _safeTransferAVAX(penaltyCollector, excessAvax);
+        uint256 excessVolt = address(this).balance - voltReserve;
+        if (excessVolt > 0) {
+            volt.safeTransfer(penaltyCollector, excessVolt);
         }
     }
 
@@ -599,22 +607,30 @@ contract LaunchEvent {
             if (address(pair) == address(0)) return 0;
             return tokenIncentiveIssuerRefund + tokenReserve;
         } else {
-            if (avaxAllocated == 0) return 0;
-            return (user.balance * tokenIncentivesForUsers) / avaxAllocated;
+            if (voltAllocated == 0) return 0;
+            return (user.balance * tokenIncentivesForUsers) / voltAllocated;
         }
     }
 
     /// @notice Returns the outstanding balance of the launch event contract
-    /// @return The balances of AVAX and issued token held by the launch contract
+    /// @return The balances of VOLT and issued token held by the launch contract
     function getReserves() external view returns (uint256, uint256) {
-        return (avaxReserve, tokenReserve + tokenIncentivesBalance);
+        return (voltReserve, tokenReserve + tokenIncentivesBalance);
     }
 
-    /// @notice Get the rJOE amount needed to deposit AVAX
-    /// @param _avaxAmount The amount of AVAX to deposit
-    /// @return The amount of rJOE needed
-    function getRJoeAmount(uint256 _avaxAmount) public view returns (uint256) {
-        return (_avaxAmount * rJoePerAvax) / 1e18;
+    function isUserStaked(address user) public view returns (bool) {
+        uint256 veVoltBalance = IVeVolt(veVolt).balanceOf(user, auctionStart);
+        return veVoltBalance > 0;
+    }
+
+    function getAllocation(address user) public view returns (uint256) {
+        uint256 veVoltBalance = IVeVolt(veVolt).balanceOf(user, auctionStart);
+        uint256 stakedUserAllocation = Math.min(veVoltBalance * veVoltPerVolt, maxStakedUserAllocation);
+        return isUserStaked(user) ? stakedUserAllocation : maxUnstakedUserAllocation;
+    }
+
+    function getMaxAllocation(address user) public view returns (uint256) {
+        return isUserStaked(user) ? maxStakedUserAllocation : maxUnstakedUserAllocation;
     }
 
     /// @notice The total amount of liquidity pool tokens the user can withdraw
@@ -622,13 +638,13 @@ contract LaunchEvent {
     /// @return The user's balance of liquidity pool token
     function pairBalance(address _user) public view returns (uint256) {
         UserInfo memory user = getUserInfo[_user];
-        if (avaxAllocated == 0 || user.hasWithdrawnPair) {
+        if (voltAllocated == 0 || user.hasWithdrawnPair) {
             return 0;
         }
         if (msg.sender == issuer) {
             return lpSupply / 2;
         }
-        return (user.balance * lpSupply) / avaxAllocated / 2;
+        return (user.balance * lpSupply) / voltAllocated / 2;
     }
 
     /// @dev Bytecode size optimization for the `atPhase` modifier
@@ -664,18 +680,5 @@ contract LaunchEvent {
         } else {
             require(!stopped, "LaunchEvent: stopped");
         }
-    }
-
-    /// @notice Send AVAX
-    /// @param _to The receiving address
-    /// @param _value The amount of AVAX to send
-    /// @dev Will revert on failure
-    function _safeTransferAVAX(address _to, uint256 _value) internal {
-        require(
-            address(this).balance - _value >= avaxReserve,
-            "LaunchEvent: not enough avax"
-        );
-        (bool success, ) = _to.call{value: _value}(new bytes(0));
-        require(success, "LaunchEvent: avax transfer failed");
     }
 }
