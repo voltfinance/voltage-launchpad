@@ -1,17 +1,13 @@
-[![Actions Status](https://github.com/traderjoe-xyz/rocket-joe/workflows/test/badge.svg)](https://github.com/traderjoe-xyz/rocket-joe/actions)
+# Voltage LaunchPad
 
-# Rocket Joe
-
-_Rocket Joe_ is a token launch platform where participants bid to provide liquidity for newly issued tokens. The platform enables price discovery and token distribution over a period of time before tokens are issued to public market, while discouraging front-running by bots. In addition, it improves liquidity sustainability by allowing issuing protocols to acquire its own token liquidity.
-
-Full whitepaper available [here](https://github.com/traderjoe-xyz/research/blob/main/RocketJoe_Launch_Platform_for_Bootstrapping_Protocol-Owned_Liquidity.pdf).
+_Voltage LaunchPad_ is a token launch platform where participants bid to provide liquidity for newly issued tokens. The platform enables price discovery and token distribution over a period of time before tokens are issued to public market, while discouraging front-running by bots. In addition, it improves liquidity sustainability by allowing issuing protocols to acquire its own token liquidity.
 
 ## How It Works
 
-- User stakes JOE into the RocketJoeStaking contract to earn rJOE.
 - LaunchEvent is created with a fixed amount of tokens to be issued.
-- Users can deposit AVAX and rJOE into the LaunchEvent contract. The amount of rJOE needed to deposit a certain amount of AVAX is dictated by the parameter `rJoePerAvax`, which may vary from launch event to launch event.
-- Users can also withdraw AVAX (if they think the price of TOKEN/AVAX is too high), but a withdrawal penalty may be incurred depending on which phase the launch event is at:
+- Users can deposit VOLT into the LaunchEvent contract. The amount of VOLT that can be deposited depends on whether the user has
+staked veVolt or not. The amount of VOLT that can be deposited by users who have staked VeVolt is dictated by the parameter `veVoltPerVolt` and the amount that can be deposited by non vevolt stakers is determined by the `maxUnstakedUserAllocation`. The values for these params will vary from launch event to launch event.
+- Users can also withdraw VOLT (if they think the price of TOKEN/VOLT is too high), but a withdrawal penalty may be incurred depending on which phase the launch event is at:
 
 | Phase One  |                                   | Phase Two   | Phase Three                                |
 | ---------- | --------------------------------- | ----------- | ------------------------------------------ |
@@ -19,30 +15,18 @@ Full whitepaper available [here](https://github.com/traderjoe-xyz/research/blob/
 | 0% penalty | 0-50% penalty (linear increasing) | 20% penalty | LPs are locked + bonus incentives received |
 
 - **Phase One**:
-  - 0-24 hrs: Users can deposit and withdraw AVAX without any penalty.
-  - 24-72 hrs: Users can continue to deposit and withdraw AVAX, but must incur a withdrawal penalty that increases linearly from 0-50% (the maximum is configurable).
-- **Phase Two**: Users can _only_ withdraw AVAX with a 20% penalty (this parameter is also configurable).
+  - 0-24 hrs: Users can deposit and withdraw VOLT without any penalty.
+  - 24-72 hrs: Users can continue to deposit and withdraw VOLT, but must incur a withdrawal penalty that increases linearly from 0-50% (the maximum is configurable).
+- **Phase Two**: Users can _only_ withdraw VOLT with a 20% penalty (this parameter is also configurable).
 - **Phase Three**: Initial liquidity is seeded, but the LP tokens are locked for an additional 0-7 days. As an incentive for locking, participants receive a bonus percentage of tokens once phase three starts. After this phase, both user and issuer are free to claim their LP tokens.
 
-## Contracts
+###### LaunchEventFactory
 
-![Rocket Joe contract flow](assets/Rocket_Joe.jpeg)
-
-###### RocketJoeToken
-
-An infinite supply ERC20 token that is an allocation credit for users to participate in a Launch Event. The amount of rJOE required to deposit an amount of AVAX into a launch event is dictated by `rJoePerAvax`, which is set manually on RocketJoeFactory. Once AVAX is deposited, rJOE is burned.
-
-###### RocketJoeStaking
-
-A MasterChef-style staking contract in which users stake JOE to earn rJOE.
-
-###### RocketJoeFactory
-
-Creates individual LaunchEvent contracts. Also sets `rJoePerAvax`.
+Creates individual LaunchEvent contracts. Also sets `veVoltPerVolt`.
 
 ###### LaunchEvent
 
-Contract in which price discovery and token distribution takes place. Issuer deposits the issued tokens and users deposit and/or withdraw AVAX during a 72 hour period. The final amount of AVAX at the end of this period dictates the TOKEN/AVAX price which will be used to the seed initial liquidity on the Trader Joe.
+Contract in which price discovery and token distribution takes place. Issuer deposits the issued tokens and users deposit and/or withdraw VOLT during a 72 hour period. The final amount of VOLT at the end of this period dictates the TOKEN/VOLT price which will be used to the seed initial liquidity on the Voltage Finance.
 
 ## Installation
 
@@ -50,8 +34,8 @@ The first things you need to do are cloning this repository and installing its
 dependencies:
 
 ```sh
-git clone https://github.com/traderjoe-xyz/rocket-joe.git
-cd rocket-joe
+git clone https://github.com/volt-finance/voltage-launchpad.git
+cd voltage-launchpad
 yarn
 ```
 
